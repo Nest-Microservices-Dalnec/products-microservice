@@ -1,0 +1,60 @@
+# ============================================
+# Etapa 1: Instalar dependencias
+# ============================================
+FROM node:21-alpine3.19 AS deps
+
+WORKDIR /usr/src/app
+
+COPY package.json ./
+COPY package-lock.json ./
+
+RUN npm install
+
+
+# ============================================
+# Etapa 2: Build
+# ============================================
+FROM node:21-alpine3.19 AS build
+
+WORKDIR /usr/src/app
+
+ARG DATABASE_URL
+ENV DATABASE_URL=${DATABASE_URL}
+
+COPY --from=deps /usr/src/app/node_modules ./node_modules
+COPY . .
+
+# 1️⃣ Generar Prisma Client PRIMERO
+RUN npx prisma generate
+
+# 2️⃣ Compilar
+RUN npm run build
+
+# 3️⃣ Limpiar dependencias (opcional)
+RUN npm ci -f --only=production && npm cache clean --force
+
+# 4️⃣ Volver a generar Prisma después de limpiar node_modules
+RUN npx prisma generate
+
+
+# ============================================
+# Etapa 3: Imagen final de producción
+# ============================================
+FROM node:21-alpine3.19 AS prod
+
+WORKDIR /usr/src/app
+
+COPY --from=build /usr/src/app/node_modules ./node_modules
+COPY --from=build /usr/src/app/dist ./dist
+COPY --from=build /usr/src/app/prisma ./prisma
+
+# 👇 IMPORTANTE: Copiar la carpeta generada por Prisma
+COPY --from=build /usr/src/app/generated ./generated
+
+ENV NODE_ENV=production
+
+USER node
+
+EXPOSE 3000
+
+CMD [ "node", "dist/main.js" ]
